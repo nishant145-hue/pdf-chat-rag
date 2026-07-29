@@ -1,0 +1,32 @@
+# Virtual Environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment Variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
+
+# Uploaded PDFs
+uploads/
+
+# Vector Store Cache
+vector_store/
+
+# Pytest
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
