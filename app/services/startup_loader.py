@@ -1,35 +1,20 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
-from faiss import logger
-
+from app.logger import logger
 from app.services.rag_pipeline import RAGPipeline
 
 
 class StartupLoader:
-    """
-    Automatically restores previously processed
-    PDF documents when the FastAPI server starts.
-    """
+    """Restore previously processed PDFs when the application starts."""
 
     def __init__(self, manager):
-
         self.manager = manager
-
-        self.metadata_dir = Path(
-            "vector_store/metadata"
-        )
-
-    # ---------------------------------------------------------
-    # Restore All Documents
-    # ---------------------------------------------------------
+        self.metadata_dir = Path("vector_store/metadata")
 
     def load_documents(self):
-
         if not self.metadata_dir.exists():
-
             logger.info("No metadata directory found.")
-
             return
 
         metadata_files = list(
@@ -37,9 +22,7 @@ class StartupLoader:
         )
 
         if not metadata_files:
-
             logger.info("No cached documents found.")
-
             return
 
         logger.info("=" * 60)
@@ -48,35 +31,52 @@ class StartupLoader:
         restored = 0
 
         for metadata_file in metadata_files:
-
             try:
-
                 with open(
                     metadata_file,
                     "r",
                     encoding="utf-8",
                 ) as file:
-
                     metadata = json.load(file)
 
-                filename = metadata["filename"]
+                filename = metadata.get("filename")
 
-                pdf_path = Path("uploads") / filename
-
-                if not pdf_path.exists():
-
-                    logger.info(
-                        f"Skipping {filename} "
-                        "(PDF missing)"
+                if not filename:
+                    logger.warning(
+                        "Skipping metadata without a filename: %s",
+                        metadata_file.name,
                     )
-
                     continue
 
-                pipeline = RAGPipeline(
-                    str(pdf_path)
+                # New uploads record the actual disk filename.
+                # Older metadata falls back to the original filename.
+                stored_filename = metadata.get(
+                    "stored_filename",
+                    filename,
                 )
 
-                document_id = self.manager.add_restored_document(
+                pdf_path = Path("uploads") / stored_filename
+
+                if not pdf_path.is_file():
+                    logger.info(
+                        "Skipping %s: PDF file is missing.",
+                        filename,
+                    )
+                    continue
+
+                storage_id = metadata.get("storage_id")
+
+                # Legacy metadata was keyed by the original filename.
+                if not storage_id:
+                    storage_id = filename
+
+                pipeline = RAGPipeline(
+                    pdf_path=str(pdf_path),
+                    storage_id=storage_id,
+                    original_filename=filename,
+                )
+
+                self.manager.add_restored_document(
                     pipeline=pipeline,
                     filename=filename,
                     pdf_path=str(pdf_path),
@@ -84,21 +84,13 @@ class StartupLoader:
 
                 restored += 1
 
-                logger.info(
-                    f"✓ Restored: {filename}"
+                logger.info("Restored: %s", filename)
+
+            except Exception:
+                logger.exception(
+                    "Failed to restore %s",
+                    metadata_file.name,
                 )
 
-            except Exception as error:
-
-                logger.info(
-                    f"Failed to restore "
-                    f"{metadata_file.name}"
-                )
-
-                logger.info(error)
-
-        logger.info(
-            f"Restored {restored} document(s)."
-        )
-
+        logger.info("Restored %d document(s).", restored)
         logger.info("=" * 60)

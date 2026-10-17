@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import (
     APIRouter,
@@ -8,18 +9,15 @@ from fastapi import (
 )
 
 from app.models.request_models import QuestionRequest
-
 from app.models.response_models import (
     AnswerResponse,
-    DocumentsResponse,
     DocumentInfo,
+    DocumentsResponse,
     MessageResponse,
     StatusResponse,
     UploadResponse,
 )
-
 from app.services.document_manager import DocumentManager
-
 
 router = APIRouter()
 
@@ -42,45 +40,69 @@ def home():
     "/upload",
     response_model=UploadResponse,
 )
-async def upload_pdf(
-    file: UploadFile = File(...)
-):
-    """
-    Upload a PDF and build a new RAG pipeline.
-    """
+async def upload_pdf(file: UploadFile = File(...)):
+    """Upload a PDF without overwriting existing documents."""
 
     if not file.filename:
         raise HTTPException(
             status_code=400,
-            detail="Filename is missing."
+            detail="Filename is missing.",
         )
 
-    if not file.filename.lower().endswith(".pdf"):
+    original_filename = Path(file.filename.replace("\\", "/")).name
+
+    if (
+        not original_filename
+        or original_filename in {".", ".."}
+        or not original_filename.lower().endswith(".pdf")
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Only PDF files are allowed."
+            detail="Only PDF files are allowed.",
         )
 
     upload_dir = Path("uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
-    upload_dir.mkdir(exist_ok=True)
+    stored_filename = f"{uuid4()}_{original_filename}"
+    file_path = upload_dir / stored_filename
 
-    file_path = upload_dir / file.filename
+    try:
+        content = await file.read()
 
-    with open(file_path, "wb") as pdf_file:
-        pdf_file.write(await file.read())
+        if not content:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded PDF is empty.",
+            )
 
-    document_id = manager.add_document(
-        pdf_path=str(file_path),
-        filename=file.filename,
-    )
+        with open(file_path, "xb") as pdf_file:
+            pdf_file.write(content)
 
-    return UploadResponse(
-        document_id=document_id,
-        filename=file.filename,
-        status="ready",
-    )
+        document_id = manager.add_document(
+            pdf_path=str(file_path),
+            filename=original_filename,
+        )
 
+        return UploadResponse(
+            document_id=document_id,
+            filename=original_filename,
+            status="ready",
+        )
+
+    except HTTPException:
+        if file_path.exists():
+            file_path.unlink()
+        raise
+
+    except Exception as exc:
+        if file_path.exists():
+            file_path.unlink()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process the uploaded PDF.",
+        ) from exc
 
 @router.get(
     "/status",
@@ -94,7 +116,7 @@ def status():
     return StatusResponse(
         documents_loaded=manager.total_documents()
     )
-    
+
 @router.post(
     "/ask",
     response_model=AnswerResponse,
@@ -109,14 +131,16 @@ def ask_question(request: QuestionRequest):
     if pipeline is None:
         raise HTTPException(
             status_code=404,
-            detail="Document not found."
+            detail="Document not found.",
         )
 
-    answer = pipeline.ask(request.question)
+    result = pipeline.ask_with_citations(request.question)
 
     return AnswerResponse(
-        answer=answer
+        answer=result["answer"],
+        citations=result["citations"],
     )
+
 
 
 @router.get(

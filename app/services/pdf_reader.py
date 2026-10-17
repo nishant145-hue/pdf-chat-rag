@@ -1,48 +1,67 @@
-from pathlib import Path
+﻿from pathlib import Path
+
 from pypdf import PdfReader
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
+def extract_pages_from_pdf(pdf_path: str) -> list[dict]:
     """
-    Extract all text from a PDF file.
-
-    Args:
-        pdf_path: Path to the PDF file.
+    Extract readable text page by page.
 
     Returns:
-        A single string containing all extracted text.
+        A list of dictionaries containing the original page number
+        and extracted text.
+
+    Example:
+        [
+            {"page": 1, "text": "Introduction to Python..."},
+            {"page": 2, "text": "Variables and data types..."},
+        ]
 
     Raises:
         FileNotFoundError: If the PDF file does not exist.
-        ValueError: If no readable text is found.
+        ValueError: If the PDF contains no readable text.
     """
 
     pdf_file = Path(pdf_path)
 
-    # Check whether the file exists
-    if not pdf_file.exists():
-        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+    if not pdf_file.is_file():
+        raise FileNotFoundError(
+            f"PDF file not found: {pdf_path}"
+        )
 
-    # Open the PDF
     reader = PdfReader(pdf_file)
 
     extracted_pages = []
 
-    # Read every page
     for page_number, page in enumerate(reader.pages, start=1):
-
         text = page.extract_text()
 
-        # Skip pages with no readable text
         if text and text.strip():
-            extracted_pages.append(text)
-        else:
-            print(f"Warning: Page {page_number} contains no readable text.")
+            extracted_pages.append(
+                {
+                    "page": page_number,
+                    "text": text.strip(),
+                }
+            )
 
-    # Combine all pages
-    final_text = "\n".join(extracted_pages)
+    if not extracted_pages:
+        raise ValueError(
+            "No readable text found in the PDF."
+        )
 
-    if not final_text.strip():
-        raise ValueError("No readable text found in the PDF.")
+    return extracted_pages
 
-    return final_text
+
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """
+    Extract all readable PDF text into a single string.
+
+    Retained for compatibility with existing callers.
+    """
+
+    pages = extract_pages_from_pdf(pdf_path)
+
+    return "\n".join(
+        page["text"]
+        for page in pages
+    )

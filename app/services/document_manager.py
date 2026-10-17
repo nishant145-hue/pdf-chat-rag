@@ -25,17 +25,33 @@ class DocumentManager:
     # Add Document
     # ---------------------------------------------------------
 
-    def add_document(
-        self,
-        pdf_path: str,
-        filename: str,
-    ) -> str:
-
+    def add_document(self, pdf_path: str, filename: str) -> str:
         document_id = str(uuid4())
 
-        pipeline = RAGPipeline(pdf_path)
+        pipeline = RAGPipeline(
+            pdf_path=pdf_path,
+            storage_id=document_id,
+            original_filename=filename,
+        )
 
         self.documents[document_id] = {
+            "document_id": document_id,
+            "filename": filename,
+            "path": pdf_path,
+            "pipeline": pipeline,
+            "chunks": pipeline.total_chunks(),
+        }
+
+        return document_id
+    def add_restored_document(
+        self,
+        pipeline,
+        filename: str,
+        pdf_path: str,
+        ):
+            document_id = str(uuid4())
+
+            self.documents[document_id] = {
 
             "document_id": document_id,
 
@@ -48,29 +64,7 @@ class DocumentManager:
             "chunks": pipeline.total_chunks(),
         }
 
-        return document_id
-    def add_restored_document(
-    self,
-    pipeline,
-    filename: str,
-    pdf_path: str,
-    ):
-        document_id = str(uuid4())
-
-        self.documents[document_id] = {
-
-        "document_id": document_id,
-
-        "filename": filename,
-
-        "path": pdf_path,
-
-        "pipeline": pipeline,
-
-        "chunks": pipeline.total_chunks(),
-    }
-
-        return document_id
+            return document_id
     # ---------------------------------------------------------
     # Get Pipeline
     # ---------------------------------------------------------
@@ -117,11 +111,7 @@ class DocumentManager:
     # Delete Document
     # ---------------------------------------------------------
 
-    def delete_document(
-        self,
-        document_id: str,
-    ) -> bool:
-
+    def delete_document(self, document_id: str) -> bool:
         document = self.documents.get(document_id)
 
         if document is None:
@@ -129,9 +119,8 @@ class DocumentManager:
 
         pipeline = document["pipeline"]
 
-        pipeline.vector_store.delete(
-            document["filename"]
-        )
+        # Delete persisted data using the unique storage ID.
+        pipeline.vector_store.delete(pipeline.storage_id)
 
         pdf_path = Path(document["path"])
 
@@ -173,14 +162,10 @@ class DocumentManager:
     # ---------------------------------------------------------
 
     def clear(self):
-
         for document in list(self.documents.values()):
-
             pipeline = document["pipeline"]
 
-            pipeline.vector_store.delete(
-                document["filename"]
-            )
+            pipeline.vector_store.delete(pipeline.storage_id)
 
             pdf_path = Path(document["path"])
 

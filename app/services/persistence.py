@@ -123,33 +123,34 @@ class PersistenceService:
         filename: str,
         chunk_count: int,
         embedding_model: str,
+        *,
+        original_filename: str | None = None,
+        stored_filename: str | None = None,
+        storage_id: str | None = None,
     ):
+        """Save document metadata while preserving storage identity."""
 
         name = self._safe_name(filename)
-
         path = self.metadata_dir / f"{name}_metadata.json"
 
         metadata = {
-
-            "filename": filename,
-
+            # Preserve the original filename for existing callers.
+            "filename": original_filename or filename,
+            "storage_id": storage_id or filename,
             "chunk_count": chunk_count,
-
             "embedding_model": embedding_model,
-
-            "created": datetime.now().isoformat()
+            "created": datetime.now().isoformat(),
         }
 
-        with open(
-            path,
-            "w",
-            encoding="utf-8",
-        ) as file:
+        if stored_filename is not None:
+            metadata["stored_filename"] = stored_filename
 
+        with open(path, "w", encoding="utf-8") as file:
             json.dump(
                 metadata,
                 file,
                 indent=4,
+                ensure_ascii=False,
             )
 
     def load_metadata(
