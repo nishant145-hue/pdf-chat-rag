@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,12 +18,32 @@ class Settings(BaseSettings):
     API_VERSION: str = "3.0.0"
 
     # ---------------------------------------------------------
+    # CORS
+    # ---------------------------------------------------------
+
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+    CORS_ALLOW_CREDENTIALS: bool = False
+    # ---------------------------------------------------------
     # Storage
     # ---------------------------------------------------------
 
     BASE_DIR: Path = Path(".")
 
     UPLOAD_DIR: Path = Path("uploads")
+
+    MAX_UPLOAD_SIZE_BYTES: int = Field(
+        default=10 * 1024 * 1024,
+        gt=0,
+    )
+
+    MAX_PDF_PAGES: int = Field(
+        default=500,
+        gt=0,
+    )
 
     VECTOR_STORE_DIR: Path = Path("vector_store")
 

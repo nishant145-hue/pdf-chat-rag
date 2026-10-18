@@ -8,6 +8,7 @@ from fastapi import (
     UploadFile,
 )
 
+from app.config import settings
 from app.models.request_models import QuestionRequest
 from app.models.response_models import (
     AnswerResponse,
@@ -18,6 +19,7 @@ from app.models.response_models import (
     UploadResponse,
 )
 from app.services.document_manager import DocumentManager
+from app.services.pdf_reader import validate_pdf_file
 
 router = APIRouter()
 
@@ -61,23 +63,45 @@ async def upload_pdf(file: UploadFile = File(...)):
             detail="Only PDF files are allowed.",
         )
 
-    upload_dir = Path("uploads")
+    upload_dir = settings.UPLOAD_DIR
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     stored_filename = f"{uuid4()}_{original_filename}"
     file_path = upload_dir / stored_filename
 
     try:
-        content = await file.read()
+        total_bytes = 0
+        chunk_size = 1024 * 1024  # Read at most 1 MiB per iteration.
 
-        if not content:
+        with open(file_path, "xb") as pdf_file:
+            while True:
+                chunk = await file.read(chunk_size)
+
+                if not chunk:
+                    break
+
+                total_bytes += len(chunk)
+
+                if total_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Uploaded PDF exceeds the maximum allowed size.",
+                    )
+
+                pdf_file.write(chunk)
+
+        if total_bytes == 0:
             raise HTTPException(
                 status_code=400,
                 detail="Uploaded PDF is empty.",
             )
-
-        with open(file_path, "xb") as pdf_file:
-            pdf_file.write(content)
+        try:
+            validate_pdf_file(str(file_path))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
 
         document_id = manager.add_document(
             pdf_path=str(file_path),
