@@ -25,7 +25,14 @@ class DocumentManager:
     # Add Document
     # ---------------------------------------------------------
 
-    def add_document(self, pdf_path: str, filename: str) -> str:
+
+    def add_document(
+        self,
+        pdf_path: str,
+        filename: str,
+        owner_user_id: int | None = None,
+    ) -> str:
+        """Register a document and optionally associate its owner."""
         document_id = str(uuid4())
 
         pipeline = RAGPipeline(
@@ -40,31 +47,34 @@ class DocumentManager:
             "path": pdf_path,
             "pipeline": pipeline,
             "chunks": pipeline.total_chunks(),
+            "owner_user_id": owner_user_id,
         }
 
         return document_id
+
     def add_restored_document(
         self,
         pipeline,
         filename: str,
         pdf_path: str,
-        ):
-            document_id = str(uuid4())
+        owner_user_id: int | None = None,
+        document_id: str | None = None,
+    ) -> str:
+        """Register a restored document with a stable ID when available."""
+        restored_id = document_id or pipeline.storage_id
 
-            self.documents[document_id] = {
-
-            "document_id": document_id,
-
+        self.documents[restored_id] = {
+            "document_id": restored_id,
             "filename": filename,
-
             "path": pdf_path,
-
             "pipeline": pipeline,
-
             "chunks": pipeline.total_chunks(),
+            "owner_user_id": owner_user_id,
         }
 
-            return document_id
+        return restored_id
+
+
     # ---------------------------------------------------------
     # Get Pipeline
     # ---------------------------------------------------------

@@ -14,6 +14,7 @@ client = TestClient(app)
 def test_upload_rejects_files_exceeding_configured_limit(
     tmp_path,
     monkeypatch,
+    authenticated_client,
 ):
     monkeypatch.chdir(tmp_path)
 
@@ -26,8 +27,9 @@ def test_upload_rejects_files_exceeding_configured_limit(
     oversized_content = b"%PDF-1.4\nThis file is too large."
 
     with patch.object(manager, "add_document") as mock_add:
-        response = client.post(
+        response = authenticated_client["client"].post(
             "/upload",
+            headers=authenticated_client["headers"],
             files={
                 "file": (
                     "large.pdf",
@@ -52,6 +54,7 @@ def test_upload_rejects_files_exceeding_configured_limit(
 def test_upload_rejects_non_pdf_content_and_cleans_up(
     tmp_path,
     monkeypatch,
+    authenticated_client,
 ):
     from pathlib import Path
     from unittest.mock import patch
@@ -59,8 +62,9 @@ def test_upload_rejects_non_pdf_content_and_cleans_up(
     monkeypatch.chdir(tmp_path)
 
     with patch.object(manager, "add_document") as mock_add:
-        response = client.post(
+        response = authenticated_client["client"].post(
             "/upload",
+            headers=authenticated_client["headers"],
             files={
                 "file": (
                     "fake.pdf",
@@ -77,6 +81,7 @@ def test_upload_rejects_non_pdf_content_and_cleans_up(
 def test_upload_rejects_pdf_over_page_limit_and_cleans_up(
     tmp_path,
     monkeypatch,
+    authenticated_client,
 ):
     from io import BytesIO
     from pathlib import Path
@@ -96,8 +101,9 @@ def test_upload_rejects_pdf_over_page_limit_and_cleans_up(
     writer.write(buffer)
 
     with patch.object(manager, "add_document") as mock_add:
-        response = client.post(
+        response = authenticated_client["client"].post(
             "/upload",
+            headers=authenticated_client["headers"],
             files={
                 "file": (
                     "too_many_pages.pdf",

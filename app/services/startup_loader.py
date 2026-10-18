@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from app.api.auth_routes import auth_service
 from app.logger import logger
 from app.services.rag_pipeline import RAGPipeline
 
@@ -64,11 +65,20 @@ class StartupLoader:
                     )
                     continue
 
-                storage_id = metadata.get("storage_id")
 
                 # Legacy metadata was keyed by the original filename.
-                if not storage_id:
-                    storage_id = filename
+                storage_id = metadata.get("storage_id") or filename
+
+                # Preserve the persisted storage ID as the document ID.
+                document_id = storage_id
+
+                # Legacy documents remain unassigned unless an ownership
+                # record already exists in the authentication database.
+                owner_user_id = auth_service.get_document_owner(
+                    document_id
+                )
+
+
 
                 pipeline = RAGPipeline(
                     pdf_path=str(pdf_path),
@@ -80,6 +90,8 @@ class StartupLoader:
                     pipeline=pipeline,
                     filename=filename,
                     pdf_path=str(pdf_path),
+                    document_id=document_id,
+                    owner_user_id=owner_user_id,
                 )
 
                 restored += 1

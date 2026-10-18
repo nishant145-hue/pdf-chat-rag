@@ -30,3 +30,14 @@ vector_store/
 # OS
 .DS_Store
 Thumbs.db
+.env
+.env.*
+!.env.example
+
+# Authentication database
+auth.db
+auth.db-*
+
+# SQLite database files
+*.sqlite
+*.sqlite3

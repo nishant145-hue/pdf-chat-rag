@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.services.auth_service import AuthService
+
 from app.services.document_manager import DocumentManager
 from app.services.startup_loader import StartupLoader
 
@@ -136,3 +138,157 @@ def test_skips_document_when_pdf_is_missing(tmp_path, monkeypatch):
 
     mock_pipeline.assert_not_called()
     assert manager.total_documents() == 0
+
+def test_restored_document_preserves_ownership_after_restart(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+
+    # Create isolated storage directories.
+    metadata_dir = tmp_path / "vector_store" / "metadata"
+    uploads_dir = tmp_path / "uploads"
+
+    metadata_dir.mkdir(parents=True)
+    uploads_dir.mkdir(parents=True)
+
+    # Create a persisted PDF and its metadata.
+    stored_filename = "private-report.pdf"
+    pdf_path = uploads_dir / stored_filename
+    pdf_path.write_bytes(b"test PDF")
+
+    write_metadata(
+        metadata_dir,
+        "persistent-document",
+        {
+            "filename": "private-report.pdf",
+            "storage_id": "persistent-document",
+            "stored_filename": stored_filename,
+            "chunk_count": 1,
+            "embedding_model": "all-MiniLM-L6-v2",
+        },
+    )
+
+    # Create an isolated authentication database.
+    auth_database = tmp_path / "auth.db"
+    service = AuthService(auth_database)
+
+    owner = service.register_user(
+        "persistent-owner@example.com",
+        "secure-owner-password-123",
+    )
+
+    other_user = service.register_user(
+        "other-persistent-user@example.com",
+        "secure-other-password-123",
+    )
+
+    service.assign_document_owner(
+        "persistent-document",
+        owner["id"],
+    )
+
+    # Simulate an application restart by creating a new manager
+    # and restoring the document from persisted metadata.
+    manager = DocumentManager()
+
+    pipeline = MagicMock()
+    pipeline.total_chunks.return_value = 1
+
+    with (
+        patch(
+            "app.services.startup_loader.auth_service",
+            service,
+        ),
+        patch(
+            "app.services.startup_loader.RAGPipeline",
+            return_value=pipeline,
+        ),
+    ):
+        StartupLoader(manager).load_documents()
+
+    # Confirm that the document was restored.
+    assert manager.total_documents() == 1
+
+    document = manager.get_document("persistent-document")
+
+    assert document is not None
+    assert document["filename"] == "private-report.pdf"
+
+    # Ownership must remain associated with the original owner.
+    assert service.user_owns_document(
+        "persistent-document",
+        owner["id"],
+    )
+
+    assert not service.user_owns_document(
+        "persistent-document",
+        other_user["id"],
+    )
+
+    # The restored document should also retain its owner ID in memory.
+    assert document["owner_user_id"] == owner["id"]
+
+def test_restored_legacy_document_has_no_owner(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+
+    metadata_dir = tmp_path / "vector_store" / "metadata"
+    uploads_dir = tmp_path / "uploads"
+
+    metadata_dir.mkdir(parents=True)
+    uploads_dir.mkdir(parents=True)
+
+    stored_filename = "legacy-report.pdf"
+
+    (uploads_dir / stored_filename).write_bytes(b"legacy PDF")
+
+    write_metadata(
+        metadata_dir,
+        "legacy-report",
+        {
+            "filename": "legacy-report.pdf",
+            "storage_id": "legacy-report",
+            "stored_filename": stored_filename,
+            "chunk_count": 1,
+        },
+    )
+
+    auth_database = tmp_path / "legacy_auth.db"
+    service = AuthService(auth_database)
+
+    user = service.register_user(
+        "legacy-test-user@example.com",
+        "secure-legacy-password-123",
+    )
+
+    manager = DocumentManager()
+
+    pipeline = MagicMock()
+    pipeline.total_chunks.return_value = 1
+
+    with (
+        patch(
+            "app.services.startup_loader.auth_service",
+            service,
+        ),
+        patch(
+            "app.services.startup_loader.RAGPipeline",
+            return_value=pipeline,
+        ),
+    ):
+        StartupLoader(manager).load_documents()
+
+    document = manager.get_document("legacy-report")
+
+    assert document is not None
+    assert document["owner_user_id"] is None
+
+    assert service.get_document_owner("legacy-report") is None
+
+    assert not service.user_owns_document(
+        "legacy-report",
+        user["id"],
+    )

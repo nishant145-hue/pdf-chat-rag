@@ -3,11 +3,14 @@ from uuid import uuid4
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     HTTPException,
     UploadFile,
 )
 
+from app.api.auth_routes import auth_service
+from app.api.dependencies import get_current_user
 from app.config import settings
 from app.models.request_models import QuestionRequest
 from app.models.response_models import (
@@ -23,16 +26,36 @@ from app.services.pdf_reader import validate_pdf_file
 
 router = APIRouter()
 
-# Global document manager
+# Global document manager.
 manager = DocumentManager()
+
+
+def _require_owned_document(
+    document_id: str,
+    user_id: int,
+) -> dict:
+    """Return a document only when the requesting user owns it."""
+
+    document = manager.get_document(document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    if not auth_service.user_owns_document(document_id, user_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    return document
 
 
 @router.get("/")
 def home():
-    """
-    Health check endpoint.
-    """
-
+    """Public API health information."""
     return {
         "message": "PDF Chat RAG API is running."
     }
@@ -42,8 +65,11 @@ def home():
     "/upload",
     response_model=UploadResponse,
 )
-async def upload_pdf(file: UploadFile = File(...)):
-    """Upload a PDF without overwriting existing documents."""
+async def upload_pdf(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload a PDF and assign it to the authenticated user."""
 
     if not file.filename:
         raise HTTPException(
@@ -51,7 +77,9 @@ async def upload_pdf(file: UploadFile = File(...)):
             detail="Filename is missing.",
         )
 
-    original_filename = Path(file.filename.replace("\\", "/")).name
+    original_filename = Path(
+        file.filename.replace("\\", "/")
+    ).name
 
     if (
         not original_filename
@@ -69,9 +97,11 @@ async def upload_pdf(file: UploadFile = File(...)):
     stored_filename = f"{uuid4()}_{original_filename}"
     file_path = upload_dir / stored_filename
 
+    document_id = None
+
     try:
         total_bytes = 0
-        chunk_size = 1024 * 1024  # Read at most 1 MiB per iteration.
+        chunk_size = 1024 * 1024
 
         with open(file_path, "xb") as pdf_file:
             while True:
@@ -85,7 +115,10 @@ async def upload_pdf(file: UploadFile = File(...)):
                 if total_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
                     raise HTTPException(
                         status_code=413,
-                        detail="Uploaded PDF exceeds the maximum allowed size.",
+                        detail=(
+                            "Uploaded PDF exceeds the maximum "
+                            "allowed size."
+                        ),
                     )
 
                 pdf_file.write(chunk)
@@ -95,6 +128,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                 status_code=400,
                 detail="Uploaded PDF is empty.",
             )
+
         try:
             validate_pdf_file(str(file_path))
         except ValueError as exc:
@@ -106,6 +140,13 @@ async def upload_pdf(file: UploadFile = File(...)):
         document_id = manager.add_document(
             pdf_path=str(file_path),
             filename=original_filename,
+            owner_user_id=current_user["id"],
+        )
+
+        # Persist ownership before reporting upload success.
+        auth_service.assign_document_owner(
+            document_id=document_id,
+            owner_user_id=current_user["id"],
         )
 
         return UploadResponse(
@@ -115,12 +156,16 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
 
     except HTTPException:
-        if file_path.exists():
+        if document_id is not None:
+            manager.delete_document(document_id)
+        elif file_path.exists():
             file_path.unlink()
         raise
 
     except Exception as exc:
-        if file_path.exists():
+        if document_id is not None:
+            manager.delete_document(document_id)
+        elif file_path.exists():
             file_path.unlink()
 
         raise HTTPException(
@@ -128,36 +173,46 @@ async def upload_pdf(file: UploadFile = File(...)):
             detail="Failed to process the uploaded PDF.",
         ) from exc
 
+
 @router.get(
     "/status",
     response_model=StatusResponse,
 )
-def status():
-    """
-    Returns how many documents are loaded.
-    """
+def status(
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the number of documents owned by the current user."""
+
+    owned_documents = [
+        document
+        for document in manager.list_documents()
+        if auth_service.user_owns_document(
+            document["document_id"],
+            current_user["id"],
+        )
+    ]
 
     return StatusResponse(
-        documents_loaded=manager.total_documents()
+        documents_loaded=len(owned_documents)
     )
+
 
 @router.post(
     "/ask",
     response_model=AnswerResponse,
 )
-def ask_question(request: QuestionRequest):
-    """
-    Ask a question about a specific uploaded PDF.
-    """
+def ask_question(
+    request: QuestionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Answer questions only about documents owned by the user."""
 
-    pipeline = manager.get_pipeline(request.document_id)
+    document = _require_owned_document(
+        request.document_id,
+        current_user["id"],
+    )
 
-    if pipeline is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Document not found.",
-        )
-
+    pipeline = document["pipeline"]
     result = pipeline.ask_with_citations(request.question)
 
     return AnswerResponse(
@@ -166,19 +221,23 @@ def ask_question(request: QuestionRequest):
     )
 
 
-
 @router.get(
     "/documents",
     response_model=DocumentsResponse,
 )
-def list_documents():
-    """
-    Returns all uploaded documents.
-    """
+def list_documents(
+    current_user: dict = Depends(get_current_user),
+):
+    """List only documents owned by the current user."""
 
     documents = []
 
     for document in manager.list_documents():
+        if not auth_service.user_owns_document(
+            document["document_id"],
+            current_user["id"],
+        ):
+            continue
 
         documents.append(
             DocumentInfo(
@@ -196,19 +255,27 @@ def list_documents():
     "/documents/{document_id}",
     response_model=MessageResponse,
 )
-def delete_document(document_id: str):
-    """
-    Delete an uploaded PDF.
-    """
+def delete_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a document only when the current user owns it."""
+
+    _require_owned_document(
+        document_id,
+        current_user["id"],
+    )
 
     deleted = manager.delete_document(document_id)
 
     if not deleted:
         raise HTTPException(
             status_code=404,
-            detail="Document not found."
+            detail="Document not found.",
         )
+
+    auth_service.delete_document_owner(document_id)
 
     return MessageResponse(
         message="Document deleted successfully."
-    )
+)
